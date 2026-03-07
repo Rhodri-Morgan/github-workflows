@@ -30,14 +30,9 @@ inputs:
     description: "Newline-separated list of Docker build secrets (id=value)"
     required: false
     default: ""
-  image-tag:
-    description: "Image tag override (defaults to tag from git ref)"
-    required: false
-    default: ""
-
 outputs:
   image-tag:
-    description: "Resolved image tag"
+    description: "Resolved image tag (first 6 chars of commit SHA)"
     value: ${{ steps.resolve-tag.outputs.image-tag }}
 
 runs:
@@ -47,12 +42,7 @@ runs:
       id: resolve-tag
       shell: bash
       run: |
-        if [[ -n "${{ inputs.image-tag }}" ]]; then
-          IMAGE_TAG="${{ inputs.image-tag }}"
-        else
-          TAG_NAME=${GITHUB_REF##*/}
-          IMAGE_TAG=$(echo $TAG_NAME | sed 's/^v//')
-        fi
+        IMAGE_TAG="${GITHUB_SHA:0:6}"
         echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_ENV
         echo "image-tag=$IMAGE_TAG" >> $GITHUB_OUTPUT
 
