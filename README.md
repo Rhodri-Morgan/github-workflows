@@ -37,7 +37,7 @@ RUN --mount=type=secret,id=MY_SECRET \
 And pass them from the workflow:
 
 ```yaml
-- uses: rhodri-morgan/github-workflows/build@main
+- uses: Rhodri-Morgan/github-workflows/build@main
   with:
     image-repo: my-project
     secrets: |
