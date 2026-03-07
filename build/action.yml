@@ -1,0 +1,88 @@
+name: "Build"
+description: "Builds a Docker image with registry-based layer caching"
+
+inputs:
+  image-repo:
+    description: "ECR repository name"
+    required: true
+  aws-region:
+    description: "AWS region (e.g. eu-west-1, us-west-2)"
+    required: true
+  account-id:
+    description: "AWS account ID (used for registry cache)"
+    required: true
+  role-arn:
+    description: "IAM role ARN (used for registry cache)"
+    required: true
+  dockerfile:
+    description: "Path to the Dockerfile"
+    required: false
+    default: "Dockerfile"
+  build-context:
+    description: "Docker build context path"
+    required: false
+    default: "."
+  build-args:
+    description: "Newline-separated list of Docker build args"
+    required: false
+    default: ""
+  secrets:
+    description: "Newline-separated list of Docker build secrets (id=value)"
+    required: false
+    default: ""
+  image-tag:
+    description: "Image tag override (defaults to tag from git ref)"
+    required: false
+    default: ""
+
+outputs:
+  image-tag:
+    description: "Resolved image tag"
+    value: ${{ steps.resolve-tag.outputs.image-tag }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Resolve image tag
+      id: resolve-tag
+      shell: bash
+      run: |
+        if [[ -n "${{ inputs.image-tag }}" ]]; then
+          IMAGE_TAG="${{ inputs.image-tag }}"
+        else
+          TAG_NAME=${GITHUB_REF##*/}
+          IMAGE_TAG=$(echo $TAG_NAME | sed 's/^v//')
+        fi
+        echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_ENV
+        echo "image-tag=$IMAGE_TAG" >> $GITHUB_OUTPUT
+
+    - name: Set environment variables
+      shell: bash
+      run: |
+        echo "IMAGE_REGISTRY=${{ inputs.account-id }}.dkr.ecr.${{ inputs.aws-region }}.amazonaws.com" >> $GITHUB_ENV
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-region: ${{ inputs.aws-region }}
+        role-to-assume: ${{ inputs.role-arn }}
+        role-duration-seconds: 1200
+
+    - name: Login to ECR
+      uses: aws-actions/amazon-ecr-login@v1
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Build image
+      uses: docker/build-push-action@v6
+      with:
+        context: ${{ inputs.build-context }}
+        file: ${{ inputs.dockerfile }}
+        load: true
+        tags: |
+          local/${{ inputs.image-repo }}:${{ env.IMAGE_TAG }}
+        build-args: ${{ inputs.build-args }}
+        secrets: ${{ inputs.secrets }}
+        cache-from: type=registry,ref=${{ env.IMAGE_REGISTRY }}/${{ inputs.image-repo }}:cache
+        cache-to: type=registry,ref=${{ env.IMAGE_REGISTRY }}/${{ inputs.image-repo }}:cache,mode=max
