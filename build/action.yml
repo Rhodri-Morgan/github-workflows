@@ -30,6 +30,10 @@ inputs:
     description: "Newline-separated list of Docker build secrets (id=value)"
     required: false
     default: ""
+  push-cache:
+    description: "Push layer cache to registry (set to 'true' to enable)"
+    required: false
+    default: "false"
 outputs:
   image-tag:
     description: "Resolved image tag (first 6 chars of commit SHA)"
@@ -75,4 +79,4 @@ runs:
         build-args: ${{ inputs.build-args }}
         secrets: ${{ inputs.secrets }}
         cache-from: type=registry,ref=${{ env.IMAGE_REGISTRY }}/${{ inputs.image-repo }}:cache
-        cache-to: type=registry,ref=${{ env.IMAGE_REGISTRY }}/${{ inputs.image-repo }}:cache,mode=max
+        cache-to: ${{ inputs.push-cache == 'true' && format('type=registry,ref={0}/{1}:cache,mode=max', env.IMAGE_REGISTRY, inputs.image-repo) || '' }}
