@@ -4,10 +4,11 @@ Reusable GitHub composite actions for projects.
 
 ## Actions
 
-| Action  | Description                                                        |
-| ------- | ------------------------------------------------------------------ |
-| `build` | Builds a Docker image with Buildx and registry-based layer caching |
-| `push`  | Tags and pushes a local Docker image to an ECR registry            |
+| Action                     | Description                                                        |
+| -------------------------- | ------------------------------------------------------------------ |
+| `build`                    | Builds a Docker image with Buildx and registry-based layer caching |
+| `push`                     | Tags and pushes a local Docker image to an ECR registry            |
+| `deploy_elastic_beanstalk` | Deploys an ECR image to Elastic Beanstalk and updates SSM tag      |
 
 ## GitHub Secrets
 
@@ -60,3 +61,32 @@ Before setting up build workflows, note the following:
 - If you have a **monorepo**, use separate jobs per image so they build concurrently on tag push.
 - **Validate your Dockerfile layer caching.** Check each layer for cache-busting pitfalls: changing commit SHAs baked into build args, rotating secrets passed as build args instead of `--mount=type=secret`, non-deterministic package installs (missing lockfiles), timestamps in generated files, and `COPY . .` placed before dependency installation layers.
 - **Only enable `push-cache` for images you intend to push to ECR.** The build action reads from the registry cache by default, but only writes back to it when `push-cache: "true"` is set. Enable this on builds that will be pushed so the cache stays up to date; leave it off for local-only or throwaway builds to avoid polluting the cache.
+
+### Deploy to Elastic Beanstalk
+
+Deploys an image that already exists in ECR to an Elastic Beanstalk environment. The action:
+
+1. Verifies the image tag exists in ECR
+2. Captures the current SSM tag and EB version for rollback
+3. Downloads the existing `Dockerrun.aws.json` from S3, updates the image URI, and re-uploads it
+4. Creates a new EB application version and deploys it
+5. Polls the environment until it reaches `Ready` status (configurable timeout)
+6. Updates the SSM parameter only after a successful deployment
+7. On failure, rolls back the `Dockerrun.aws.json` and EB environment to the previous version
+
+```yaml
+- uses: Rhodri-Morgan/github-workflows/deploy_elastic_beanstalk@main
+  with:
+    image-repo: my-app
+    image-tag: ${{ needs.build.outputs.image-tag }}
+    aws-region: eu-west-1
+    account-id: ${{ secrets.AWS_ACCOUNT_ID }}
+    role-arn: ${{ secrets.AWS_ROLE_ARN }}
+    image-tag-ssm-parameter: prod-eu-west-1-my-app-image-tag
+    eb-application: prod-eu-west-1-my-app
+    eb-environment: prod-eu-west-1-my-app
+    eb-deployment-bucket: prod-eu-west-1-eb-deployments
+    wait-timeout: "300"
+```
+
+The IAM role used must have permissions for: `ecr:DescribeImages`, `ssm:GetParameter`, `ssm:PutParameter`, `s3:GetObject`, `s3:PutObject`, `elasticbeanstalk:CreateApplicationVersion`, `elasticbeanstalk:UpdateEnvironment`, and `elasticbeanstalk:DescribeEnvironments`.
