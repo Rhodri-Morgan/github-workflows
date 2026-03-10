@@ -64,29 +64,4 @@ Before setting up build workflows, note the following:
 
 ### Deploy to Elastic Beanstalk
 
-Deploys an image that already exists in ECR to an Elastic Beanstalk environment. The action:
-
-1. Verifies the image tag exists in ECR
-2. Captures the current SSM tag and EB version for rollback
-3. Downloads the existing `Dockerrun.aws.json` from S3, updates the image URI, and re-uploads it
-4. Creates a new EB application version and deploys it
-5. Polls the environment until it reaches `Ready` status (configurable timeout)
-6. Updates the SSM parameter only after a successful deployment
-7. On failure, rolls back the `Dockerrun.aws.json` and EB environment to the previous version
-
-```yaml
-- uses: Rhodri-Morgan/github-workflows/deploy_elastic_beanstalk@main
-  with:
-    image-repo: my-app
-    image-tag: ${{ needs.build.outputs.image-tag }}
-    aws-region: eu-west-1
-    account-id: ${{ secrets.AWS_ACCOUNT_ID }}
-    role-arn: ${{ secrets.AWS_ROLE_ARN }}
-    image-tag-ssm-parameter: prod-eu-west-1-my-app-image-tag
-    eb-application: prod-eu-west-1-my-app
-    eb-environment: prod-eu-west-1-my-app
-    eb-deployment-bucket: prod-eu-west-1-eb-deployments
-    wait-timeout: "300"
-```
-
-The IAM role used must have permissions for: `ecr:DescribeImages`, `ssm:GetParameter`, `ssm:PutParameter`, `s3:GetObject`, `s3:PutObject`, `elasticbeanstalk:CreateApplicationVersion`, `elasticbeanstalk:UpdateEnvironment`, and `elasticbeanstalk:DescribeEnvironments`.
+This action is for Elastic Beanstalk environments running the Docker platform. It deploys an ECR image by updating the existing `Dockerrun.aws.json` in S3 with the new image tag. The SSM parameter is only updated after a successful deployment. On failure, the action automatically rolls back to the previous EB version.
