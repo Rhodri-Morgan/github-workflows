@@ -106,11 +106,21 @@ runs:
 
         aws s3 cp /tmp/Dockerrun.aws.json "s3://${{ inputs.eb-deployment-bucket }}/$S3_KEY"
 
-        aws elasticbeanstalk create-application-version \
+        if ! CREATE_OUTPUT=$(aws elasticbeanstalk create-application-version \
           --application-name "${{ inputs.eb-application }}" \
           --version-label "$VERSION_LABEL" \
           --description "Image: ${{ inputs.image-repo }}:${{ inputs.image-tag }}" \
-          --source-bundle S3Bucket="${{ inputs.eb-deployment-bucket }}",S3Key="$S3_KEY"
+          --source-bundle S3Bucket="${{ inputs.eb-deployment-bucket }}",S3Key="$S3_KEY" 2>&1); then
+          case "$CREATE_OUTPUT" in
+            *"already exists"*)
+              echo "Application version already exists after create attempt: $VERSION_LABEL"
+              ;;
+            *)
+              echo "$CREATE_OUTPUT"
+              exit 1
+              ;;
+          esac
+        fi
 
         echo "version-label=$VERSION_LABEL" >> $GITHUB_OUTPUT
         echo "Created application version: $VERSION_LABEL"
