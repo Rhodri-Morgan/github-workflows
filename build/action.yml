@@ -14,6 +14,10 @@ inputs:
   role-arn:
     description: "IAM role ARN (used for registry cache)"
     required: true
+  image-tag:
+    description: "Image tag to use; defaults to the first 6 chars of commit SHA when omitted"
+    required: false
+    default: ""
   dockerfile:
     description: "Path to the Dockerfile"
     required: false
@@ -36,7 +40,7 @@ inputs:
     default: "false"
 outputs:
   image-tag:
-    description: "Resolved image tag (first 6 chars of commit SHA)"
+    description: "Resolved image tag (input value or first 6 chars of commit SHA)"
     value: ${{ steps.resolve-tag.outputs.image-tag }}
 
 runs:
@@ -46,7 +50,12 @@ runs:
       id: resolve-tag
       shell: bash
       run: |
-        IMAGE_TAG="${GITHUB_SHA:0:6}"
+        IMAGE_TAG="${{ inputs.image-tag }}"
+
+        if [ -z "$IMAGE_TAG" ]; then
+          IMAGE_TAG="${GITHUB_SHA:0:6}"
+        fi
+
         echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_ENV
         echo "image-tag=$IMAGE_TAG" >> $GITHUB_OUTPUT
 
