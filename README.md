@@ -65,3 +65,72 @@ Before setting up build workflows, note the following:
 ### Deploy to Elastic Beanstalk
 
 This action is for Elastic Beanstalk environments running the Docker platform. It deploys an ECR image by updating the existing `Dockerrun.aws.json` in S3 with the new image tag. The SSM parameter is only updated after a successful deployment. On failure, the action automatically rolls back to the previous EB version.
+
+For `polymarket-discord-bot`, Terraform currently provisions the production deployment with these concrete values:
+
+- `image-repo`: `polymarket-discord-bot`
+- `aws-region`: `eu-west-1`
+- `image-tag-ssm-parameter`: `prod-eu-west-1-polymarket-discord-bot-image-tag`
+- `eb-application`: `prod-eu-west-1-polymarket-discord-bot`
+- `eb-environment`: `prod-eu-west-1-polymarket-discord-bot`
+- `eb-deployment-bucket`: `prod-eu-west-1-eb-deployments`
+
+The consuming repository should already have `AWS_ACCOUNT_ID` and `AWS_ROLE_ARN` populated by the Terraform-managed GitHub secrets.
+
+Example workflow:
+
+```yaml
+name: Deploy
+
+on:
+  push:
+    branches:
+      - master
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      image-tag: ${{ steps.build.outputs.image-tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: build
+        uses: Rhodri-Morgan/github-workflows/build@main
+        with:
+          image-repo: polymarket-discord-bot
+          aws-region: eu-west-1
+          account-id: ${{ secrets.AWS_ACCOUNT_ID }}
+          role-arn: ${{ secrets.AWS_ROLE_ARN }}
+          push-cache: "true"
+
+      - uses: Rhodri-Morgan/github-workflows/push@main
+        with:
+          image-repo: polymarket-discord-bot
+          image-tag: ${{ steps.build.outputs.image-tag }}
+          aws-region: eu-west-1
+          account-id: ${{ secrets.AWS_ACCOUNT_ID }}
+          role-arn: ${{ secrets.AWS_ROLE_ARN }}
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - uses: Rhodri-Morgan/github-workflows/deploy_elastic_beanstalk@main
+        with:
+          image-repo: polymarket-discord-bot
+          image-tag: ${{ needs.build.outputs.image-tag }}
+          aws-region: eu-west-1
+          account-id: ${{ secrets.AWS_ACCOUNT_ID }}
+          role-arn: ${{ secrets.AWS_ROLE_ARN }}
+          image-tag-ssm-parameter: prod-eu-west-1-polymarket-discord-bot-image-tag
+          eb-application: prod-eu-west-1-polymarket-discord-bot
+          eb-environment: prod-eu-west-1-polymarket-discord-bot
+          eb-deployment-bucket: prod-eu-west-1-eb-deployments
+```
+
+These values come from the Terraform definitions in `applications/elastic_beanstalk.tf`, the naming logic in `modules/elastic-beanstalk/main.tf`, and the GitHub OIDC policy in `github/templates/policies/root_policy.json`.
