@@ -87,6 +87,17 @@ runs:
         VERSION_LABEL="${{ inputs.image-repo }}-${{ inputs.image-tag }}"
         DOCKER_IMAGE="${IMAGE_REGISTRY}/${{ inputs.image-repo }}:${{ inputs.image-tag }}"
         S3_KEY="${{ inputs.image-repo }}/Dockerrun.aws.json"
+        EXISTING_VERSION=$(aws elasticbeanstalk describe-application-versions \
+          --application-name "${{ inputs.eb-application }}" \
+          --version-labels "$VERSION_LABEL" \
+          --query 'ApplicationVersions[0].VersionLabel' \
+          --output text)
+
+        if [ "$EXISTING_VERSION" = "$VERSION_LABEL" ]; then
+          echo "Application version already exists: $VERSION_LABEL"
+          echo "version-label=$VERSION_LABEL" >> $GITHUB_OUTPUT
+          exit 0
+        fi
 
         aws s3 cp "s3://${{ inputs.eb-deployment-bucket }}/$S3_KEY" /tmp/Dockerrun.aws.json
 
