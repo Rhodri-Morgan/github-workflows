@@ -78,29 +78,32 @@ For `polymarket-discord-bot`, Terraform currently provisions the production depl
 
 The consuming repository should already have `AWS_ACCOUNT_ID` and `AWS_ROLE_ARN` populated by the Terraform-managed GitHub secrets.
 
-Example workflow:
+Example build & push workflow (triggered by tag push):
 
 ```yaml
-name: Deploy
+name: Build & Push to ECR
 
 on:
   push:
-    branches:
-      - master
+    tags:
+      - "v*.*.*"
+      - "v*.*.*-*"
 
 permissions:
-  contents: read
   id-token: write
+  contents: read
+
+run-name: Build and push image ${{ github.ref_name }}
 
 jobs:
-  build:
+  build-push:
     runs-on: ubuntu-latest
-    outputs:
-      image-tag: ${{ steps.build.outputs.image-tag }}
+    name: Build and push
     steps:
       - uses: actions/checkout@v4
 
-      - id: build
+      - name: Build image
+        id: build
         uses: Rhodri-Morgan/github-workflows/build@main
         with:
           image-repo: polymarket-discord-bot
@@ -110,22 +113,53 @@ jobs:
           role-arn: ${{ secrets.AWS_ROLE_ARN }}
           push-cache: "true"
 
-      - uses: Rhodri-Morgan/github-workflows/push@main
+      - name: Run tests in built image
+        run: docker run --rm local/polymarket-discord-bot:${{ steps.build.outputs.image-tag }} make test
+
+      - name: Push
+        uses: Rhodri-Morgan/github-workflows/push@main
         with:
           image-repo: polymarket-discord-bot
           image-tag: ${{ steps.build.outputs.image-tag }}
           aws-region: eu-west-1
           account-id: ${{ secrets.AWS_ACCOUNT_ID }}
           role-arn: ${{ secrets.AWS_ROLE_ARN }}
+```
 
+Example deploy workflow (manual dispatch):
+
+```yaml
+name: Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      deploy-tag:
+        description: "Image Tag:"
+        default: v2026.MM.DD-n
+        required: true
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
+
+run-name: Deploy ${{ inputs.deploy-tag }}
+
+concurrency:
+  group: deploy-polymarket-discord-bot
+  cancel-in-progress: false
+
+jobs:
   deploy:
     runs-on: ubuntu-latest
-    needs: build
+    name: Deploy
     steps:
-      - uses: Rhodri-Morgan/github-workflows/deploy_elastic_beanstalk@main
+      - name: Deploy to Elastic Beanstalk
+        uses: Rhodri-Morgan/github-workflows/deploy_elastic_beanstalk@main
         with:
           image-repo: polymarket-discord-bot
-          image-tag: ${{ needs.build.outputs.image-tag }}
+          image-tag: ${{ inputs.deploy-tag }}
           aws-region: eu-west-1
           account-id: ${{ secrets.AWS_ACCOUNT_ID }}
           role-arn: ${{ secrets.AWS_ROLE_ARN }}
@@ -133,6 +167,7 @@ jobs:
           eb-application: prod-eu-west-1-polymarket-discord-bot
           eb-environment: prod-eu-west-1-polymarket-discord-bot
           eb-deployment-bucket: prod-eu-west-1-eb-deployments
+          wait-timeout: "600"
 ```
 
 These values come from the Terraform definitions in `applications/elastic_beanstalk.tf`, the naming logic in `modules/elastic-beanstalk/main.tf`, and the GitHub OIDC policy in `github/templates/policies/root_policy.json`.
