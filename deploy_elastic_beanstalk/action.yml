@@ -147,31 +147,29 @@ runs:
         ELAPSED=0
         DESIRED_VERSION="${{ steps.version.outputs.version-label }}"
         DEPLOY_STARTED_AT="${{ steps.deploy.outputs.deploy-start-time }}"
+        SEEN_UPDATING=false
 
         echo "Waiting up to ${TIMEOUT}s for environment to be ready..."
         while [ $ELAPSED -lt $TIMEOUT ]; do
-          STATUS=$(aws elasticbeanstalk describe-environments \
+          ENV_INFO=$(aws elasticbeanstalk describe-environments \
             --environment-names "${{ inputs.eb-environment }}" \
-            --query 'Environments[0].Status' \
+            --query 'Environments[0].[Status,HealthStatus,VersionLabel]' \
             --output text)
-          HEALTH=$(aws elasticbeanstalk describe-environments \
-            --environment-names "${{ inputs.eb-environment }}" \
-            --query 'Environments[0].HealthStatus' \
-            --output text)
-          CURRENT_VERSION=$(aws elasticbeanstalk describe-environments \
-            --environment-names "${{ inputs.eb-environment }}" \
-            --query 'Environments[0].VersionLabel' \
-            --output text)
-          ERROR_EVENT=$(aws elasticbeanstalk describe-events \
+          STATUS=$(echo "$ENV_INFO" | awk '{print $1}')
+          HEALTH=$(echo "$ENV_INFO" | awk '{print $2}')
+          CURRENT_VERSION=$(echo "$ENV_INFO" | awk '{print $3}')
+
+          FAILURE_EVENTS=$(aws elasticbeanstalk describe-events \
             --environment-name "${{ inputs.eb-environment }}" \
             --start-time "$DEPLOY_STARTED_AT" \
-            --query 'Events[?Severity==`ERROR`]|[0].Message' \
+            --query 'Events[?Severity==`ERROR` || Severity==`FATAL`].[Severity,Message]' \
             --output text 2>/dev/null || true)
 
           echo "Status=$STATUS Health=$HEALTH Version=$CURRENT_VERSION (${ELAPSED}s/${TIMEOUT}s)"
 
-          if [ -n "$ERROR_EVENT" ] && [ "$ERROR_EVENT" != "None" ]; then
-            echo "::error::Elastic Beanstalk reported deployment failure: $ERROR_EVENT"
+          if [ -n "$FAILURE_EVENTS" ] && [ "$FAILURE_EVENTS" != "None" ]; then
+            echo "::error::Elastic Beanstalk reported deployment failure:"
+            echo "$FAILURE_EVENTS"
             echo "failed=true" >> $GITHUB_OUTPUT
             exit 0
           fi
@@ -179,6 +177,22 @@ runs:
           if [ "$STATUS" = "Ready" ] && [ "$CURRENT_VERSION" = "$DESIRED_VERSION" ]; then
             echo "Deployment complete"
             echo "failed=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          if [ "$STATUS" = "Updating" ]; then
+            SEEN_UPDATING=true
+          fi
+
+          if [ "$SEEN_UPDATING" = true ] && [ "$STATUS" = "Ready" ] && [ "$CURRENT_VERSION" != "$DESIRED_VERSION" ]; then
+            echo "::error::Deployment failed — environment returned to Ready with version $CURRENT_VERSION instead of $DESIRED_VERSION"
+            aws elasticbeanstalk describe-events \
+              --environment-name "${{ inputs.eb-environment }}" \
+              --start-time "$DEPLOY_STARTED_AT" \
+              --max-items 10 \
+              --query 'Events[].{date:EventDate,severity:Severity,message:Message}' \
+              --output table || true
+            echo "failed=true" >> $GITHUB_OUTPUT
             exit 0
           fi
 
