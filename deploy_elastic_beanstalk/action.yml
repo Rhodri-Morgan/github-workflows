@@ -154,7 +154,7 @@ runs:
           ENV_INFO=$(aws elasticbeanstalk describe-environments \
             --environment-names "${{ inputs.eb-environment }}" \
             --query 'Environments[0].[Status,HealthStatus,VersionLabel]' \
-            --output text)
+            --output text | tr -d '\r')
           STATUS=$(echo "$ENV_INFO" | awk '{print $1}')
           HEALTH=$(echo "$ENV_INFO" | awk '{print $2}')
           CURRENT_VERSION=$(echo "$ENV_INFO" | awk '{print $3}')
