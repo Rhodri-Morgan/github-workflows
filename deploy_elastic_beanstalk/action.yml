@@ -101,7 +101,7 @@ runs:
 
         aws s3 cp "s3://${{ inputs.eb-deployment-bucket }}/$S3_KEY" /tmp/Dockerrun.aws.json
 
-        jq --arg image "$DOCKER_IMAGE" '.Image.Name = $image' /tmp/Dockerrun.aws.json > /tmp/Dockerrun.updated.json
+        jq -c --arg image "$DOCKER_IMAGE" '.Image.Name = $image' /tmp/Dockerrun.aws.json > /tmp/Dockerrun.updated.json
         mv /tmp/Dockerrun.updated.json /tmp/Dockerrun.aws.json
 
         aws s3 cp /tmp/Dockerrun.aws.json "s3://${{ inputs.eb-deployment-bucket }}/$S3_KEY"
@@ -234,7 +234,7 @@ runs:
         echo "::warning::Rolling back to previous state: EB version=$PREVIOUS_VERSION"
 
         aws s3 cp "s3://${{ inputs.eb-deployment-bucket }}/$S3_KEY" /tmp/Dockerrun.aws.json
-        jq --arg image "$PREVIOUS_IMAGE" '.Image.Name = $image' /tmp/Dockerrun.aws.json > /tmp/Dockerrun.rollback.json
+        jq -c --arg image "$PREVIOUS_IMAGE" '.Image.Name = $image' /tmp/Dockerrun.aws.json > /tmp/Dockerrun.rollback.json
         mv /tmp/Dockerrun.rollback.json /tmp/Dockerrun.aws.json
         aws s3 cp /tmp/Dockerrun.aws.json "s3://${{ inputs.eb-deployment-bucket }}/$S3_KEY"
 
