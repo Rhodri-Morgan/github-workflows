@@ -29,6 +29,9 @@ inputs:
   eb-deployment-bucket:
     description: "S3 bucket for Dockerrun.aws.json"
     required: true
+  container-port:
+    description: "Container port for Dockerrun.aws.json"
+    required: true
   wait-timeout:
     description: "Maximum time in seconds to wait for deployment to complete"
     required: false
@@ -47,6 +50,8 @@ runs:
     - name: Set environment variables
       shell: bash
       run: |
+        IMAGE_TAG=$(echo "${{ inputs.image-tag }}" | xargs)
+        echo "IMAGE_TAG=${IMAGE_TAG}" >> $GITHUB_ENV
         echo "IMAGE_REGISTRY=${{ inputs.account-id }}.dkr.ecr.${{ inputs.aws-region }}.amazonaws.com" >> $GITHUB_ENV
 
     - name: Verify image exists in ECR
@@ -55,10 +60,10 @@ runs:
         set -e
         aws ecr describe-images \
           --repository-name ${{ inputs.image-repo }} \
-          --image-ids imageTag=${{ inputs.image-tag }} \
+          --image-ids imageTag="${IMAGE_TAG}" \
           --query 'imageDetails[0].imageTags' \
           --output text > /dev/null
-        echo "Image ${{ inputs.image-repo }}:${{ inputs.image-tag }} verified in ECR"
+        echo "Image ${{ inputs.image-repo }}:${IMAGE_TAG} verified in ECR"
 
     - name: Capture current state for rollback
       id: previous
@@ -84,8 +89,8 @@ runs:
       shell: bash
       run: |
         set -e
-        VERSION_LABEL="${{ inputs.image-repo }}-${{ inputs.image-tag }}"
-        DOCKER_IMAGE="${IMAGE_REGISTRY}/${{ inputs.image-repo }}:${{ inputs.image-tag }}"
+        VERSION_LABEL="${{ inputs.image-repo }}-${IMAGE_TAG}"
+        DOCKER_IMAGE="${IMAGE_REGISTRY}/${{ inputs.image-repo }}:${IMAGE_TAG}"
         S3_KEY="${{ inputs.image-repo }}/Dockerrun.aws.json"
         EXISTING_VERSION=$(aws elasticbeanstalk describe-application-versions \
           --application-name "${{ inputs.eb-application }}" \
@@ -99,17 +104,15 @@ runs:
           exit 0
         fi
 
-        aws s3 cp "s3://${{ inputs.eb-deployment-bucket }}/$S3_KEY" /tmp/Dockerrun.aws.json
-
-        jq -c --arg image "$DOCKER_IMAGE" '.Image.Name = $image' /tmp/Dockerrun.aws.json > /tmp/Dockerrun.updated.json
-        mv /tmp/Dockerrun.updated.json /tmp/Dockerrun.aws.json
+        printf '{"AWSEBDockerrunVersion":"1","Image":{"Name":"%s","Update":"true"},"Ports":[{"ContainerPort":"%s","HostPort":"%s"}]}' \
+          "$DOCKER_IMAGE" "${{ inputs.container-port }}" "${{ inputs.container-port }}" > /tmp/Dockerrun.aws.json
 
         aws s3 cp /tmp/Dockerrun.aws.json "s3://${{ inputs.eb-deployment-bucket }}/$S3_KEY"
 
         if ! CREATE_OUTPUT=$(aws elasticbeanstalk create-application-version \
           --application-name "${{ inputs.eb-application }}" \
           --version-label "$VERSION_LABEL" \
-          --description "Image: ${{ inputs.image-repo }}:${{ inputs.image-tag }}" \
+          --description "Image: ${{ inputs.image-repo }}:${IMAGE_TAG}" \
           --source-bundle S3Bucket="${{ inputs.eb-deployment-bucket }}",S3Key="$S3_KEY" 2>&1); then
           case "$CREATE_OUTPUT" in
             *"already exists"*)
@@ -216,10 +219,10 @@ runs:
         set -e
         aws ssm put-parameter \
           --name "${{ inputs.image-tag-ssm-parameter }}" \
-          --value "${{ inputs.image-tag }}" \
+          --value "${IMAGE_TAG}" \
           --type String \
           --overwrite
-        echo "Updated ${{ inputs.image-tag-ssm-parameter }} to ${{ inputs.image-tag }}"
+        echo "Updated ${{ inputs.image-tag-ssm-parameter }} to ${IMAGE_TAG}"
 
     - name: Rollback on failure
       if: steps.wait.outputs.failed == 'true'
@@ -233,9 +236,8 @@ runs:
 
         echo "::warning::Rolling back to previous state: EB version=$PREVIOUS_VERSION"
 
-        aws s3 cp "s3://${{ inputs.eb-deployment-bucket }}/$S3_KEY" /tmp/Dockerrun.aws.json
-        jq -c --arg image "$PREVIOUS_IMAGE" '.Image.Name = $image' /tmp/Dockerrun.aws.json > /tmp/Dockerrun.rollback.json
-        mv /tmp/Dockerrun.rollback.json /tmp/Dockerrun.aws.json
+        printf '{"AWSEBDockerrunVersion":"1","Image":{"Name":"%s","Update":"true"},"Ports":[{"ContainerPort":"%s","HostPort":"%s"}]}' \
+          "$PREVIOUS_IMAGE" "${{ inputs.container-port }}" "${{ inputs.container-port }}" > /tmp/Dockerrun.aws.json
         aws s3 cp /tmp/Dockerrun.aws.json "s3://${{ inputs.eb-deployment-bucket }}/$S3_KEY"
 
         aws elasticbeanstalk update-environment \
