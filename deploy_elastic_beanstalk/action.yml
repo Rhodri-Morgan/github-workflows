@@ -29,9 +29,6 @@ inputs:
   eb-deployment-bucket:
     description: "S3 bucket for Dockerrun.aws.json"
     required: true
-  container-port:
-    description: "Container port for Dockerrun.aws.json"
-    required: true
   wait-timeout:
     description: "Maximum time in seconds to wait for deployment to complete"
     required: false
@@ -104,8 +101,10 @@ runs:
           exit 0
         fi
 
-        printf '{"AWSEBDockerrunVersion":"1","Image":{"Name":"%s","Update":"true"},"Ports":[{"ContainerPort":"%s","HostPort":"%s"}]}' \
-          "$DOCKER_IMAGE" "${{ inputs.container-port }}" "${{ inputs.container-port }}" > /tmp/Dockerrun.aws.json
+        aws s3 cp "s3://${{ inputs.eb-deployment-bucket }}/$S3_KEY" /tmp/Dockerrun.aws.json
+
+        jq -c --arg image "$DOCKER_IMAGE" '.Image.Name = $image' /tmp/Dockerrun.aws.json > /tmp/Dockerrun.updated.json
+        mv /tmp/Dockerrun.updated.json /tmp/Dockerrun.aws.json
 
         aws s3 cp /tmp/Dockerrun.aws.json "s3://${{ inputs.eb-deployment-bucket }}/$S3_KEY"
 
@@ -236,8 +235,9 @@ runs:
 
         echo "::warning::Rolling back to previous state: EB version=$PREVIOUS_VERSION"
 
-        printf '{"AWSEBDockerrunVersion":"1","Image":{"Name":"%s","Update":"true"},"Ports":[{"ContainerPort":"%s","HostPort":"%s"}]}' \
-          "$PREVIOUS_IMAGE" "${{ inputs.container-port }}" "${{ inputs.container-port }}" > /tmp/Dockerrun.aws.json
+        aws s3 cp "s3://${{ inputs.eb-deployment-bucket }}/$S3_KEY" /tmp/Dockerrun.aws.json
+        jq -c --arg image "$PREVIOUS_IMAGE" '.Image.Name = $image' /tmp/Dockerrun.aws.json > /tmp/Dockerrun.rollback.json
+        mv /tmp/Dockerrun.rollback.json /tmp/Dockerrun.aws.json
         aws s3 cp /tmp/Dockerrun.aws.json "s3://${{ inputs.eb-deployment-bucket }}/$S3_KEY"
 
         aws elasticbeanstalk update-environment \
