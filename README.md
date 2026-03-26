@@ -116,7 +116,7 @@ Replace `your-ecr-repository` with your ECR repository name. Adjust the tag trig
 
 ### Deploy to ECS
 
-This action deploys a new image tag to an ECS service by registering a new task definition with the updated image tag. The `v` prefix is stripped automatically from the image tag. The SSM parameter is only updated after a successful deployment. On failure, the action automatically rolls back to the previous task definition.
+This action deploys a new image tag to an ECS service by registering a new task definition with the updated image tag. The SSM parameter is only updated after a successful deployment. On failure, the action automatically rolls back to the previous task definition.
 
 Example deploy workflow (manual dispatch):
 

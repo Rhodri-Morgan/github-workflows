@@ -3,7 +3,7 @@ description: "Deploys a new image tag to an ECS service, updates SSM parameter, 
 
 inputs:
   image-tag:
-    description: "Image tag to deploy (v prefix is stripped automatically)"
+    description: "Image tag to deploy"
     required: true
   role-arn:
     description: "AWS IAM role ARN to assume"
@@ -39,9 +39,6 @@ runs:
       shell: bash
       run: |
         IMAGE_TAG="${{ inputs.image-tag }}"
-        if [[ "$IMAGE_TAG" =~ ^v[0-9] ]]; then
-          IMAGE_TAG=$(echo "$IMAGE_TAG" | sed 's/^v//')
-        fi
         echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_ENV
 
     - name: Get current state
