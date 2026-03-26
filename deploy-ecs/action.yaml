@@ -1,0 +1,137 @@
+name: "Deploy to ECS"
+description: "Deploys a new image tag to an ECS service, updates SSM parameter, and rolls back on failure"
+
+inputs:
+  image-tag:
+    description: "Image tag to deploy (v prefix is stripped automatically)"
+    required: true
+  role-arn:
+    description: "AWS IAM role ARN to assume"
+    required: true
+  aws-region:
+    description: "AWS region (e.g. eu-west-1, us-west-2)"
+    required: true
+  ecs-cluster:
+    description: "ECS cluster name"
+    required: true
+  ecs-service:
+    description: "ECS service name"
+    required: true
+  image-ssm-parameter:
+    description: "SSM parameter name that stores the current image tag"
+    required: true
+  deployment-timeout:
+    description: "Deployment timeout in seconds"
+    required: false
+    default: "300"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-region: ${{ inputs.aws-region }}
+        role-to-assume: ${{ inputs.role-arn }}
+        role-duration-seconds: 1200
+
+    - name: Resolve image tag
+      shell: bash
+      run: |
+        IMAGE_TAG="${{ inputs.image-tag }}"
+        if [[ "$IMAGE_TAG" =~ ^v[0-9] ]]; then
+          IMAGE_TAG=$(echo "$IMAGE_TAG" | sed 's/^v//')
+        fi
+        echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_ENV
+
+    - name: Get current state
+      shell: bash
+      run: |
+        CURRENT_IMAGE_TAG=$(aws ssm get-parameter --name "${{ inputs.image-ssm-parameter }}" --query 'Parameter.Value' --output text || true)
+        CURRENT_TASK_DEF_ARN=$(aws ecs describe-services --cluster ${{ inputs.ecs-cluster }} --services ${{ inputs.ecs-service }} --query 'services[0].taskDefinition' --output text)
+
+        echo "CURRENT_IMAGE_TAG=$CURRENT_IMAGE_TAG" >> $GITHUB_ENV
+        echo "CURRENT_TASK_DEF_ARN=$CURRENT_TASK_DEF_ARN" >> $GITHUB_ENV
+        echo "Current image tag: $CURRENT_IMAGE_TAG"
+        echo "Current task definition: $CURRENT_TASK_DEF_ARN"
+
+    - name: Create new task definition
+      shell: bash
+      run: |
+        # DO NOT MAKE TASK DEFINITION CHANGES IN HERE, THEY WILL BE PERSISTED
+        # UPDATE TERRAFORM INSTEAD
+
+        TASK_DEF=$(aws ecs describe-task-definition --task-definition $CURRENT_TASK_DEF_ARN --query 'taskDefinition' --output json)
+        NEW_TASK_DEF=$(echo $TASK_DEF | jq --arg IMAGE_TAG "$IMAGE_TAG" '
+          del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .placementConstraints, .compatibilities, .registeredAt, .registeredBy) |
+          .containerDefinitions[0].image = (.containerDefinitions[0].image | split(":")[0] + ":" + $IMAGE_TAG)
+        ')
+        NEW_TASK_DEF_ARN=$(aws ecs register-task-definition --cli-input-json "$NEW_TASK_DEF" --query 'taskDefinition.taskDefinitionArn' --output text)
+        echo "NEW_TASK_DEF_ARN=$NEW_TASK_DEF_ARN" >> $GITHUB_ENV
+        echo "Registered new task definition: $NEW_TASK_DEF_ARN"
+
+    - name: Deploy to ECS
+      shell: bash
+      run: |
+        echo "Starting deployment of new task definition: $NEW_TASK_DEF_ARN"
+        aws ecs update-service --cluster ${{ inputs.ecs-cluster }} --service ${{ inputs.ecs-service }} --task-definition $NEW_TASK_DEF_ARN --force-new-deployment
+
+    - name: Wait for deployment to complete
+      shell: bash
+      run: |
+        echo "Waiting for deployment to complete..."
+
+        TIMEOUT=${{ inputs.deployment-timeout }}
+        INTERVAL=10
+        ELAPSED=0
+
+        while [ $ELAPSED -lt $TIMEOUT ]; do
+          ROLLOUT_STATE=$(aws ecs describe-services --cluster ${{ inputs.ecs-cluster }} --services ${{ inputs.ecs-service }} --query 'services[0].deployments[0].rolloutState' --output text)
+          RUNNING_COUNT=$(aws ecs describe-services --cluster ${{ inputs.ecs-cluster }} --services ${{ inputs.ecs-service }} --query 'services[0].runningCount' --output text)
+          DESIRED_COUNT=$(aws ecs describe-services --cluster ${{ inputs.ecs-cluster }} --services ${{ inputs.ecs-service }} --query 'services[0].desiredCount' --output text)
+          FAILED_TASKS=$(aws ecs describe-services --cluster ${{ inputs.ecs-cluster }} --services ${{ inputs.ecs-service }} --query 'services[0].deployments[0].failedTasks' --output text)
+
+          echo "Rollout: $ROLLOUT_STATE | Running: $RUNNING_COUNT/$DESIRED_COUNT | Failed: $FAILED_TASKS"
+
+          if [ "$ROLLOUT_STATE" = "FAILED" ] || [ "$FAILED_TASKS" -ge 2 ]; then
+            echo "Deployment failed"
+            echo "DEPLOYMENT_SUCCESS=false" >> $GITHUB_ENV
+            break
+          fi
+
+          if [ "$ROLLOUT_STATE" = "COMPLETED" ] && [ "$RUNNING_COUNT" = "$DESIRED_COUNT" ] && [ "$DESIRED_COUNT" != "0" ]; then
+            TASK_ARNS=($(aws ecs list-tasks --cluster ${{ inputs.ecs-cluster }} --service-name ${{ inputs.ecs-service }} --query 'taskArns[]' --output text))
+            if [ ${#TASK_ARNS[@]} -gt 0 ]; then
+              TASKS_WITH_NEW_DEF=$(aws ecs describe-tasks --cluster ${{ inputs.ecs-cluster }} --tasks "${TASK_ARNS[@]}" --query "tasks[?taskDefinitionArn=='$NEW_TASK_DEF_ARN'] | length(@)" --output text)
+
+              if [ "$TASKS_WITH_NEW_DEF" = "$DESIRED_COUNT" ]; then
+                echo "Deployment completed successfully!"
+                echo "DEPLOYMENT_SUCCESS=true" >> $GITHUB_ENV
+                break
+              fi
+            fi
+          fi
+
+          sleep $INTERVAL
+          ELAPSED=$((ELAPSED + INTERVAL))
+        done
+
+        if [ $ELAPSED -ge $TIMEOUT ]; then
+          echo "Deployment timed out after $TIMEOUT seconds"
+          echo "DEPLOYMENT_SUCCESS=false" >> $GITHUB_ENV
+        fi
+
+    - name: Update SSM parameter on success
+      if: env.DEPLOYMENT_SUCCESS == 'true'
+      shell: bash
+      run: |
+        echo "Updating SSM parameter ${{ inputs.image-ssm-parameter }} to $IMAGE_TAG"
+        aws ssm put-parameter --name "${{ inputs.image-ssm-parameter }}" --value "$IMAGE_TAG" --type "String" --overwrite
+
+    - name: Rollback on failure
+      if: env.DEPLOYMENT_SUCCESS == 'false'
+      shell: bash
+      run: |
+        echo "Deployment failed, rolling back to previous task definition: $CURRENT_TASK_DEF_ARN"
+        aws ecs update-service --cluster ${{ inputs.ecs-cluster }} --service ${{ inputs.ecs-service }} --task-definition $CURRENT_TASK_DEF_ARN --force-new-deployment
+        exit 1
