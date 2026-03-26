@@ -63,6 +63,57 @@ Before setting up build workflows, note the following:
 - **Only enable `push-cache` for images you intend to push to ECR.** The build action reads from the registry cache by default, but only writes back to it when `push-cache: "true"` is set. Enable this on builds that will be pushed so the cache stays up to date; leave it off for local-only or throwaway builds to avoid polluting the cache.
 - **Set `image-tag` only when you need a custom tag.** If omitted, the build action falls back to the first 6 characters of `GITHUB_SHA`.
 
+Example tag-triggered build and push workflow:
+
+```yaml
+name: Build & Push to ECR
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+      - "v*.*.*-*"
+
+permissions:
+  id-token: write
+  contents: read
+
+run-name: Build and push image ${{ github.ref_name }}
+
+jobs:
+  build-push:
+    runs-on: ubuntu-latest
+    name: Build and push
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build image
+        id: build
+        uses: Rhodri-Morgan/github-workflows/build@main
+        with:
+          image-repo: your-ecr-repository
+          image-tag: ${{ github.ref_name }}
+          aws-region: eu-west-1
+          account-id: ${{ secrets.AWS_ACCOUNT_ID }}
+          role-arn: ${{ secrets.AWS_ROLE_ARN }}
+          push-cache: "true"
+
+      - name: Run tests in built image
+        run: docker run --rm local/your-ecr-repository:${{ steps.build.outputs.image-tag }} make ci-test
+
+      - name: Push
+        uses: Rhodri-Morgan/github-workflows/push@main
+        with:
+          image-repo: your-ecr-repository
+          image-tag: ${{ steps.build.outputs.image-tag }}
+          aws-region: eu-west-1
+          account-id: ${{ secrets.AWS_ACCOUNT_ID }}
+          role-arn: ${{ secrets.AWS_ROLE_ARN }}
+```
+
+Replace `your-ecr-repository` with your ECR repository name. Adjust the tag trigger, region, and test command to match your project.
+
 ### Deploy to ECS
 
 This action deploys a new image tag to an ECS service by registering a new task definition with the updated image tag. The `v` prefix is stripped automatically from the image tag. The SSM parameter is only updated after a successful deployment. On failure, the action automatically rolls back to the previous task definition.
