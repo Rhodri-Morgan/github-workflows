@@ -8,7 +8,7 @@ Reusable GitHub composite actions for projects.
 | -------------------------- | ------------------------------------------------------------------ |
 | `build`                    | Builds a Docker image with Buildx and registry-based layer caching |
 | `push`                     | Tags and pushes a local Docker image to an ECR registry            |
-| `deploy_elastic_beanstalk` | Deploys an ECR image to Elastic Beanstalk and updates SSM tag      |
+| `deploy-ecs`               | Deploys a new image tag to an ECS service and updates SSM tag      |
 
 ## GitHub Secrets
 
@@ -63,22 +63,7 @@ Before setting up build workflows, note the following:
 - **Only enable `push-cache` for images you intend to push to ECR.** The build action reads from the registry cache by default, but only writes back to it when `push-cache: "true"` is set. Enable this on builds that will be pushed so the cache stays up to date; leave it off for local-only or throwaway builds to avoid polluting the cache.
 - **Set `image-tag` only when you need a custom tag.** If omitted, the build action falls back to the first 6 characters of `GITHUB_SHA`.
 
-### Deploy to Elastic Beanstalk
-
-This action is for Elastic Beanstalk environments running the Docker platform. It deploys an ECR image by updating the existing `Dockerrun.aws.json` in S3 with the new image tag. The SSM parameter is only updated after a successful deployment. On failure, the action automatically rolls back to the previous EB version.
-
-For `polymarket-discord-bot`, Terraform currently provisions the production deployment with these concrete values:
-
-- `image-repo`: `polymarket-discord-bot`
-- `aws-region`: `eu-west-1`
-- `image-tag-ssm-parameter`: `prod-eu-west-1-polymarket-discord-bot-image-tag`
-- `eb-application`: `prod-eu-west-1-polymarket-discord-bot`
-- `eb-environment`: `prod-eu-west-1-polymarket-discord-bot`
-- `eb-deployment-bucket`: `prod-eu-west-1-eb-deployments`
-
-The consuming repository should already have `AWS_ACCOUNT_ID` and `AWS_ROLE_ARN` populated by the Terraform-managed GitHub secrets.
-
-Example build & push workflow (triggered by tag push):
+Example tag-triggered build and push workflow:
 
 ```yaml
 name: Build & Push to ECR
@@ -100,13 +85,14 @@ jobs:
     runs-on: ubuntu-latest
     name: Build and push
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
       - name: Build image
         id: build
         uses: Rhodri-Morgan/github-workflows/build@main
         with:
-          image-repo: polymarket-discord-bot
+          image-repo: your-ecr-repository
           image-tag: ${{ github.ref_name }}
           aws-region: eu-west-1
           account-id: ${{ secrets.AWS_ACCOUNT_ID }}
@@ -114,17 +100,23 @@ jobs:
           push-cache: "true"
 
       - name: Run tests in built image
-        run: docker run --rm local/polymarket-discord-bot:${{ steps.build.outputs.image-tag }} make test
+        run: docker run --rm local/your-ecr-repository:${{ steps.build.outputs.image-tag }} make ci-test
 
       - name: Push
         uses: Rhodri-Morgan/github-workflows/push@main
         with:
-          image-repo: polymarket-discord-bot
+          image-repo: your-ecr-repository
           image-tag: ${{ steps.build.outputs.image-tag }}
           aws-region: eu-west-1
           account-id: ${{ secrets.AWS_ACCOUNT_ID }}
           role-arn: ${{ secrets.AWS_ROLE_ARN }}
 ```
+
+Replace `your-ecr-repository` with your ECR repository name. Adjust the tag trigger, region, and test command to match your project.
+
+### Deploy to ECS
+
+This action deploys a new image tag to an ECS service by registering a new task definition with the updated image tag. The `v` prefix is stripped automatically from the image tag. The SSM parameter is only updated after a successful deployment. On failure, the action automatically rolls back to the previous task definition.
 
 Example deploy workflow (manual dispatch):
 
@@ -147,7 +139,7 @@ permissions:
 run-name: Deploy ${{ inputs.deploy-tag }}
 
 concurrency:
-  group: deploy-polymarket-discord-bot
+  group: deploy-my-service
   cancel-in-progress: false
 
 jobs:
@@ -155,22 +147,17 @@ jobs:
     runs-on: ubuntu-latest
     name: Deploy
     steps:
-      - name: Deploy to Elastic Beanstalk
-        uses: Rhodri-Morgan/github-workflows/deploy_elastic_beanstalk@main
+      - name: Deploy to ECS
+        uses: Rhodri-Morgan/github-workflows/deploy-ecs@main
         with:
-          image-repo: polymarket-discord-bot
           image-tag: ${{ inputs.deploy-tag }}
           aws-region: eu-west-1
-          account-id: ${{ secrets.AWS_ACCOUNT_ID }}
           role-arn: ${{ secrets.AWS_ROLE_ARN }}
-          image-tag-ssm-parameter: prod-eu-west-1-polymarket-discord-bot-image-tag
-          eb-application: prod-eu-west-1-polymarket-discord-bot
-          eb-environment: prod-eu-west-1-polymarket-discord-bot
-          eb-deployment-bucket: prod-eu-west-1-eb-deployments
-          wait-timeout: "600"
+          ecs-cluster: my-cluster
+          ecs-service: my-service
+          image-ssm-parameter: my-service-image-tag
+          deployment-timeout: "600"
 ```
-
-These values come from the Terraform definitions in `applications/elastic_beanstalk.tf`, the naming logic in `modules/elastic-beanstalk/main.tf`, and the GitHub OIDC policy in `github/templates/policies/root_policy.json`.
 
 ## Scripts
 
