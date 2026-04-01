@@ -6,7 +6,7 @@ Reusable GitHub composite actions for projects.
 
 | Action                     | Description                                                        |
 | -------------------------- | ------------------------------------------------------------------ |
-| `build`                    | Builds a Docker image with Buildx and registry-based layer caching |
+| `build`                    | Builds a Docker image with Buildx and optional registry-based layer caching |
 | `push`                     | Tags and pushes a local Docker image to an ECR registry            |
 | `deploy-ecs`               | Deploys a new image tag to an ECS service and updates SSM tag      |
 
@@ -60,7 +60,7 @@ Before setting up build workflows, note the following:
 - If your project needs different images for dev and prod (e.g. statically replaced variables, build-time validation that requires environment-specific values), use a [matrix strategy](https://docs.github.com/en/actions/writing-workflows/choosing-what-your-workflow-does/running-variations-of-jobs-in-a-workflow) so dev and prod builds run in parallel.
 - If you have a **monorepo**, use separate jobs per image so they build concurrently on tag push.
 - **Validate your Dockerfile layer caching.** Check each layer for cache-busting pitfalls: changing commit SHAs baked into build args, rotating secrets passed as build args instead of `--mount=type=secret`, non-deterministic package installs (missing lockfiles), timestamps in generated files, and `COPY . .` placed before dependency installation layers.
-- **Only enable `push-cache` for images you intend to push to ECR.** The build action reads from the registry cache by default, but only writes back to it when `push-cache: "true"` is set. Enable this on builds that will be pushed so the cache stays up to date; leave it off for local-only or throwaway builds to avoid polluting the cache.
+- **Registry caching is optional.** The `aws-region`, `account-id`, and `role-arn` inputs on the `build` action are only required if you want ECR-based registry layer caching. Without them, the build still works but won't cache layers to or from a remote registry.
 - **Set `image-tag` only when you need a custom tag.** If omitted, the build action falls back to the first 6 characters of `GITHUB_SHA`.
 
 Example tag-triggered build and push workflow:
@@ -97,7 +97,6 @@ jobs:
           aws-region: eu-west-1
           account-id: ${{ secrets.AWS_ACCOUNT_ID }}
           role-arn: ${{ secrets.AWS_ROLE_ARN }}
-          push-cache: "true"
 
       - name: Run tests in built image
         run: docker run --rm local/your-ecr-repository:${{ steps.build.outputs.image-tag }} make ci-test

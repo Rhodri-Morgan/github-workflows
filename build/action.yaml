@@ -1,19 +1,22 @@
 name: "Build"
-description: "Builds a Docker image with registry-based layer caching"
+description: "Builds a Docker image with optional registry-based layer caching"
 
 inputs:
   image-repo:
     description: "ECR repository name"
     required: true
   aws-region:
-    description: "AWS region (e.g. eu-west-1, us-west-2)"
-    required: true
+    description: "AWS region (e.g. eu-west-1, us-west-2) — required for registry cache"
+    required: false
+    default: ""
   account-id:
-    description: "AWS account ID (used for registry cache)"
-    required: true
+    description: "AWS account ID — required for registry cache"
+    required: false
+    default: ""
   role-arn:
-    description: "IAM role ARN (used for registry cache)"
-    required: true
+    description: "IAM role ARN — required for registry cache"
+    required: false
+    default: ""
   image-tag:
     description: "Image tag to use; defaults to the first 6 chars of commit SHA when omitted"
     required: false
@@ -34,10 +37,6 @@ inputs:
     description: "Newline-separated list of Docker build secrets (id=value)"
     required: false
     default: ""
-  push-cache:
-    description: "Push layer cache to registry (set to 'true' to enable)"
-    required: false
-    default: "false"
 outputs:
   image-tag:
     description: "Resolved image tag (input value or first 6 chars of commit SHA)"
@@ -60,11 +59,14 @@ runs:
         echo "image-tag=$IMAGE_TAG" >> $GITHUB_OUTPUT
 
     - name: Set environment variables
+      if: inputs.account-id != '' && inputs.aws-region != '' && inputs.role-arn != ''
       shell: bash
       run: |
         echo "IMAGE_REGISTRY=${{ inputs.account-id }}.dkr.ecr.${{ inputs.aws-region }}.amazonaws.com" >> $GITHUB_ENV
+        echo "USE_REGISTRY_CACHE=true" >> $GITHUB_ENV
 
     - name: Configure AWS credentials
+      if: env.USE_REGISTRY_CACHE == 'true'
       uses: aws-actions/configure-aws-credentials@v4
       with:
         aws-region: ${{ inputs.aws-region }}
@@ -72,12 +74,14 @@ runs:
         role-duration-seconds: 1200
 
     - name: Login to ECR
+      if: env.USE_REGISTRY_CACHE == 'true'
       uses: aws-actions/amazon-ecr-login@v1
 
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
 
-    - name: Build image
+    - name: Build image (with registry cache)
+      if: env.USE_REGISTRY_CACHE == 'true'
       uses: docker/build-push-action@v6
       with:
         context: ${{ inputs.build-context }}
@@ -88,4 +92,16 @@ runs:
         build-args: ${{ inputs.build-args }}
         secrets: ${{ inputs.secrets }}
         cache-from: type=registry,ref=${{ env.IMAGE_REGISTRY }}/${{ inputs.image-repo }}:cache
-        cache-to: ${{ inputs.push-cache == 'true' && format('type=registry,ref={0}/{1}:cache,mode=max', env.IMAGE_REGISTRY, inputs.image-repo) || '' }}
+        cache-to: type=registry,ref=${{ env.IMAGE_REGISTRY }}/${{ inputs.image-repo }}:cache,mode=max
+
+    - name: Build image (no cache)
+      if: env.USE_REGISTRY_CACHE != 'true'
+      uses: docker/build-push-action@v6
+      with:
+        context: ${{ inputs.build-context }}
+        file: ${{ inputs.dockerfile }}
+        load: true
+        tags: |
+          local/${{ inputs.image-repo }}:${{ env.IMAGE_TAG }}
+        build-args: ${{ inputs.build-args }}
+        secrets: ${{ inputs.secrets }}
