@@ -29,6 +29,10 @@ inputs:
     description: "Docker build context path"
     required: false
     default: "."
+  target:
+    description: "Optional Docker build target stage name"
+    required: false
+    default: ""
   build-args:
     description: "Newline-separated list of Docker build args"
     required: false
@@ -86,6 +90,7 @@ runs:
       with:
         context: ${{ inputs.build-context }}
         file: ${{ inputs.dockerfile }}
+        target: ${{ inputs.target }}
         load: true
         tags: |
           local/${{ inputs.image-repo }}:${{ env.IMAGE_TAG }}
@@ -100,6 +105,7 @@ runs:
       with:
         context: ${{ inputs.build-context }}
         file: ${{ inputs.dockerfile }}
+        target: ${{ inputs.target }}
         load: true
         tags: |
           local/${{ inputs.image-repo }}:${{ env.IMAGE_TAG }}

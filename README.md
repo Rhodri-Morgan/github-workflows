@@ -62,6 +62,7 @@ Before setting up build workflows, note the following:
 - **Validate your Dockerfile layer caching.** Check each layer for cache-busting pitfalls: changing commit SHAs baked into build args, rotating secrets passed as build args instead of `--mount=type=secret`, non-deterministic package installs (missing lockfiles), timestamps in generated files, and `COPY . .` placed before dependency installation layers.
 - **Registry caching is optional.** The `aws-region`, `account-id`, and `role-arn` inputs on the `build` action are only required if you want ECR-based registry layer caching. Without them, the build still works but won't cache layers to or from a remote registry.
 - **Set `image-tag` only when you need a custom tag.** If omitted, the build action falls back to the first 6 characters of `GITHUB_SHA`.
+- **Set `target` only when you need a named Docker stage.** If omitted, Docker builds the default final stage in the Dockerfile.
 
 Example tag-triggered build and push workflow:
 
@@ -94,6 +95,7 @@ jobs:
         with:
           image-repo: your-ecr-repository
           image-tag: ${{ github.ref_name }}
+          target: build
           aws-region: eu-west-1
           account-id: ${{ secrets.AWS_ACCOUNT_ID }}
           role-arn: ${{ secrets.AWS_ROLE_ARN }}
@@ -112,6 +114,8 @@ jobs:
 ```
 
 Replace `your-ecr-repository` with your ECR repository name. Adjust the tag trigger, region, and test command to match your project.
+
+Use `target: build` when your CI needs to run tests from an intermediate Docker stage instead of the final runtime image. Leave `target` unset when you want the default final image from the Dockerfile.
 
 ### Deploy to ECS
 
