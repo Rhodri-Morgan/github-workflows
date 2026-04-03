@@ -115,7 +115,7 @@ jobs:
 
 Replace `your-ecr-repository` with your ECR repository name. Adjust the tag trigger, region, and test command to match your project.
 
-Use `target: build` when your CI needs to run tests from an intermediate Docker stage instead of the final runtime image. Leave `target` unset when you want the default final image from the Dockerfile.
+Use `target` when you need to build a named Docker stage instead of the default final stage from the Dockerfile. In the example above, `build` is only the stage name used by that Dockerfile.
 
 ### Deploy to ECS
 
