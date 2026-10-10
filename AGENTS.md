@@ -7,7 +7,7 @@ Provides reusable GitHub composite actions for Docker image building, ECR pushin
 ## Architecture Patterns
 
 - **SSM parameter tracking**: Each deployed service has an SSM parameter storing the current image tag. This is the source of truth for what's deployed.
-- **Task definition cloning**: `deploy-ecs` reads the current task definition, strips metadata fields, updates the image tag, and registers a new revision. Infrastructure changes (env vars, resources, etc.) must be done in Terraform, not here.
+- **Task definition cloning**: `deploy-ecs` reads the current task definition, strips metadata fields, updates the image tag (the first container, or every container from `image-repos`), and registers a new revision. `pre-deploy-task-family` gets the same treatment and runs once before the service rolls. Infrastructure changes (env vars, resources, etc.) must be done in Terraform, not here.
 - **Rollback**: On deployment failure, the previous task definition ARN (captured before deploy) is used to revert the service.
 - **OIDC authentication**: All AWS access uses GitHub OIDC with `aws-actions/configure-aws-credentials@v4`.
 
