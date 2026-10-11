@@ -24,6 +24,14 @@ inputs:
     description: "Deployment timeout in seconds"
     required: false
     default: "300"
+  image-repos:
+    description: "Space-separated ECR repository names: every container whose image is from one of them moves to the new tag. Empty retags only the first container"
+    required: false
+    default: ""
+  pre-deploy-task-family:
+    description: "Task definition family to run once on the new tag, in the service's subnets and security groups, before the service rolls (e.g. migrations). If any of its containers exits non-zero, the deploy stops with the service untouched"
+    required: false
+    default: ""
 
 runs:
   using: "composite"
@@ -54,18 +62,56 @@ runs:
 
     - name: Create new task definition
       shell: bash
+      env:
+        IMAGE_REPOS: ${{ inputs.image-repos }}
+        PRE_DEPLOY_FAMILY: ${{ inputs.pre-deploy-task-family }}
       run: |
+        set -e
         # DO NOT MAKE TASK DEFINITION CHANGES IN HERE, THEY WILL BE PERSISTED
         # UPDATE TERRAFORM INSTEAD
 
-        TASK_DEF=$(aws ecs describe-task-definition --task-definition $CURRENT_TASK_DEF_ARN --query 'taskDefinition' --output json)
-        NEW_TASK_DEF=$(echo $TASK_DEF | jq --arg IMAGE_TAG "$IMAGE_TAG" '
-          del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .placementConstraints, .compatibilities, .registeredAt, .registeredBy) |
-          .containerDefinitions[0].image = (.containerDefinitions[0].image | split(":")[0] + ":" + $IMAGE_TAG)
-        ')
-        NEW_TASK_DEF_ARN=$(aws ecs register-task-definition --cli-input-json "$NEW_TASK_DEF" --query 'taskDefinition.taskDefinitionArn' --output text)
+        # A copy of the task definition $1 on the new tag, registered as its next revision; prints its ARN.
+        retag() {
+          aws ecs describe-task-definition --task-definition "$1" --query 'taskDefinition' --output json | jq \
+            --arg IMAGE_TAG "$IMAGE_TAG" --argjson repos "$(jq -nc --arg r "$IMAGE_REPOS" '$r | split(" ") | map(select(. != ""))')" '
+            def retag: .image = (.image | split(":")[0] + ":" + $IMAGE_TAG);
+            del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .placementConstraints, .compatibilities, .registeredAt, .registeredBy) |
+            if ($repos | length) == 0 then .containerDefinitions[0] |= retag
+            else .containerDefinitions |= map(if (.image | split(":")[0] | split("/")[-1]) as $repo | $repos | index($repo) then retag else . end)
+            end
+          ' > task-definition.json
+          aws ecs register-task-definition --cli-input-json file://task-definition.json --query 'taskDefinition.taskDefinitionArn' --output text
+        }
+
+        NEW_TASK_DEF_ARN=$(retag "$CURRENT_TASK_DEF_ARN")
         echo "NEW_TASK_DEF_ARN=$NEW_TASK_DEF_ARN" >> $GITHUB_ENV
         echo "Registered new task definition: $NEW_TASK_DEF_ARN"
+
+        if [ -n "$PRE_DEPLOY_FAMILY" ]; then
+          PRE_DEPLOY_TASK_DEF_ARN=$(retag "$PRE_DEPLOY_FAMILY")
+          echo "PRE_DEPLOY_TASK_DEF_ARN=$PRE_DEPLOY_TASK_DEF_ARN" >> $GITHUB_ENV
+          echo "Registered pre-deploy task definition: $PRE_DEPLOY_TASK_DEF_ARN"
+        fi
+
+    - name: Run pre-deploy task
+      if: inputs.pre-deploy-task-family != ''
+      shell: bash
+      run: |
+        set -e
+        NETWORK=$(aws ecs describe-services --cluster ${{ inputs.ecs-cluster }} --services ${{ inputs.ecs-service }} \
+          --query 'services[0].networkConfiguration' --output json)
+        TASK_ARN=$(aws ecs run-task --cluster ${{ inputs.ecs-cluster }} --task-definition "$PRE_DEPLOY_TASK_DEF_ARN" --launch-type FARGATE \
+          --network-configuration "$NETWORK" --query 'tasks[0].taskArn' --output text)
+        echo "Running $TASK_ARN"
+        aws ecs wait tasks-stopped --cluster ${{ inputs.ecs-cluster }} --tasks "$TASK_ARN"
+        aws ecs describe-tasks --cluster ${{ inputs.ecs-cluster }} --tasks "$TASK_ARN" \
+          --query 'tasks[0].[stoppedReason, containers[].[name, exitCode]]' --output text
+        FAILED=$(aws ecs describe-tasks --cluster ${{ inputs.ecs-cluster }} --tasks "$TASK_ARN" \
+          --query 'length(tasks[0].containers[?exitCode != `0`])' --output text)
+        if [ "$FAILED" != "0" ]; then
+          echo "Pre-deploy task failed; the service was not changed"
+          exit 1
+        fi
 
     - name: Deploy to ECS
       shell: bash

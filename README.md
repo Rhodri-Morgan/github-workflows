@@ -162,6 +162,31 @@ jobs:
           deployment-timeout: "600"
 ```
 
+#### Several containers, and a task before the roll
+
+By default only the task definition's first container moves to the new tag. A task running several images (sidecars
+from the same build, say) lists the ECR repositories whose containers should move in `image-repos`; containers from
+anywhere else (a public `redis` image) keep theirs.
+
+`pre-deploy-task-family` names a task definition, kept in Terraform, to run once on the new tag before the service
+rolls, typically database migrations. It retags the same way, runs in the service's own subnets and security groups,
+and if any of its containers exits non-zero the deploy stops there, with the service still on its old revision. The
+GitHub Actions role needs `ecs:RunTask` on that family.
+
+```yaml
+      - name: Deploy to ECS
+        uses: Rhodri-Morgan/github-workflows/deploy-ecs@main
+        with:
+          image-tag: ${{ inputs.deploy-tag }}
+          aws-region: eu-west-1
+          role-arn: ${{ secrets.AWS_ROLE_ARN }}
+          ecs-cluster: my-cluster
+          ecs-service: my-service
+          image-ssm-parameter: my-service-image-tag
+          image-repos: my-service-api my-service-frontend
+          pre-deploy-task-family: my-service-migrate
+```
+
 ## Scripts
 
 Helper scripts to use alongside these workflows.
